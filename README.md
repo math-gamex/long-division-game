@@ -12,9 +12,9 @@ An interactive long-division practice game (2-digit÷1-digit, 3-digit÷1-digit) 
 > Works fully offline. Single-file HTML (no frameworks).
 
 ## Demo
-- (Optional) GitHub Pages: **[https://math-gamex.github.io/long-division-game/](https://math-gamex.github.io/long-division-game)**
-- (Optional) Preview GIF  
-  ![Preview](assets/preview.gif)
+- GitHub Pages: **[https://math-gamex.github.io/long-division-game/](https://math-gamex.github.io/long-division-game)**
+- Preview
+  ![Preview](assets/preview.png)
 
 ## Features
 - SVG underlay lines so they **never overlap** with input boxes:
