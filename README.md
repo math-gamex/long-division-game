@@ -14,7 +14,9 @@ An interactive long-division practice game (2-digit÷1-digit, 3-digit÷1-digit) 
 ## Demo
 - GitHub Pages: **[https://math-gamex.github.io/long-division-game/](https://math-gamex.github.io/long-division-game)**
 - Preview
-  ![Preview](assets/preview.png)
+<p align="center">
+  <img src="assets/preview.jpeg" width="420" alt="Long Division demo">
+</p>
 
 ## Features
 - SVG underlay lines so they **never overlap** with input boxes:
