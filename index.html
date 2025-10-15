@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Long Division — Pastel Rainbow + Fun Melody + Celebration</title>
+<style>
+  :root{
+    --bg:#fafafa; --fg:#0f0f0f; --line:#111;
+    --border:#e5e7eb; --cell:#fff;
+    --fs:26px; --cellH:72px; --gap:8px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace}
+  header,main{max-width:980px;margin:0 auto;padding:14px 16px}
+  h1{margin:0 0 10px 0;font-weight:900;font-size:22px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  select,button{
+    border:1px solid var(--border);border-radius:12px;background:#fff;
+    padding:10px 14px;font-weight:800;min-height:44px;cursor:pointer
+  }
+  button.primary{background:#111;color:#fff;border-color:#111}
+  .pill{border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:13px;font-weight:800;background:#fff}
+
+  .wrap{display:flex;justify-content:center;margin-top:12px}
+  .board{
+    position:relative; display:grid; gap:var(--gap);
+    grid-template-columns:56px 72px 72px 72px 8px;
+    align-items:center; padding:16px;
+    background:#fff; border:1px solid var(--border); border-radius:14px;
+  }
+  .lines{position:absolute; inset:0; z-index:0; pointer-events:none}
+
+  .rowlabel{justify-self:end;color:#444;font-weight:700;font-size:var(--fs); line-height:1; z-index:2}
+  .cell{
+    height:var(--cellH); background:var(--cell); border:1px solid var(--border); border-radius:12px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:var(--fs); font-weight:900; line-height:1;
+    position:relative; z-index:2; transition:background-color .2s ease;
+  }
+  .cell.input{border-style:dashed}
+  input{
+    width:100%; height:100%; text-align:center; font-size:var(--fs); font-weight:900;
+    border:none; background:transparent; outline:none; color:inherit;
+  }
+  .badge{
+    position:absolute; left:6px; top:6px; width:22px; height:22px; border-radius:50%;
+    background:rgba(0,0,0,0.05); color:rgba(0,0,0,0.32);
+    font-size:12px; font-weight:900; display:flex; align-items:center; justify-content:center;
+    line-height:1; z-index:3; pointer-events:none;
+  }
+
+  .msg{min-height:26px;margin-top:12px;font-weight:900}
+  .legend{color:#6b7280;font-size:13px}
+
+  /* celebration overlay */
+  #celebrateCanvas{
+    position:fixed; inset:0; width:100vw; height:100vh; display:none;
+    pointer-events:none; z-index:1000;
+  }
+  #toast{
+    position:fixed; left:50%; top:12%; transform:translateX(-50%);
+    background:rgba(255,255,255,.95); border:1px solid var(--border);
+    border-radius:14px; padding:14px 18px; font-weight:900;
+    box-shadow:0 10px 30px rgba(0,0,0,.12);
+    z-index:1001; display:none;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>⟌ Long Division — Pastel Rainbow + Fun Melody</h1>
+  <div class="controls">
+    <label>Type:
+      <select id="modeSel">
+        <option value="2" selected>2-digit ÷ 1-digit</option>
+        <option value="3">3-digit ÷ 1-digit</option>
+      </select>
+    </label>
+    <button id="newBtn">🎲 New</button>
+    <button id="checkBtn" class="primary">✅ Check Answers</button>
+    <span class="pill" id="pill">—</span>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <div class="board" id="board">
+      <svg id="lines" class="lines" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg>
+    </div>
+  </div>
+  <div id="msg" class="msg" aria-live="polite"></div>
+  <div class="legend">Correct → pastel rainbow + fun motif 🎶 | Wrong → gray + buzz. Lines: under divisor/dividend, above remainder.</div>
+</main>
+
+<!-- celebration UI -->
+<canvas id="celebrateCanvas"></canvas>
+<div id="toast">🎉 Great job! All correct!</div>
+
+<script>
+(()=> {
+  const board   = document.getElementById('board');
+  const modeSel = document.getElementById('modeSel');
+  const newBtn  = document.getElementById('newBtn');
+  const checkBtn= document.getElementById('checkBtn');
+  const pill    = document.getElementById('pill');
+  const msg     = document.getElementById('msg');
+
+  const cfx     = document.getElementById('celebrateCanvas');
+  const toast   = document.getElementById('toast');
+
+  const clean = s => (s||'').toString().replace(/[^\d]/g,'');
+  const rint  = (a,b)=> Math.floor(Math.random()*(b-a+1))+a;
+
+  const COL_H=2, COL_T=3, COL_O=4;
+
+  const state = {
+    digits:2, a:0, b:0,
+    steps:[], startDigitCol:COL_H, finalRRow:null,
+    rainbowIndex:0, celebrated:false,
+    motifIndex:0 // which motif to play next on correct
+  };
+
+  /* 🌈 pastel rainbow palette */
+  const RAINBOW = ['#ffd6d6','#ffe4b8','#fff7b0','#d9f7be','#bae7ff','#d6d4ff','#f1ccff'];
+  const GRAY = '#d9d9d9';
+
+  /* 🔊 audio: Web Audio API */
+  let audioCtx=null, master=null;
+  function ensureAudio(){
+    if(!audioCtx){
+      audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      master = audioCtx.createGain();
+      master.gain.value = 0.10;  // 전체 볼륨
+      master.connect(audioCtx.destination);
+    }
+    if(audioCtx.state === 'suspended'){ audioCtx.resume(); }
+  }
+
+  // 짧은 음 1개 재생 (미세 글라이드 + 살짝 디케이)
+  function blip(freq=440, dur=0.12, type='square', gain=0.9, glide=1.02){
+    ensureAudio();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    o.connect(g); g.connect(master);
+
+    const now = audioCtx.currentTime;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(gain, now+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, now+dur);
+
+    // 부드러운 글라이드(아주 살짝 위로)
+    o.frequency.exponentialRampToValueAtTime(freq*glide, now + dur*0.5);
+
+    o.start(now); o.stop(now + dur + 0.01);
+  }
+
+  // 오답 버저(두 음)
+  function playBuzz(){
+    blip(220, .14, 'sawtooth', 0.7, 1.0);
+    setTimeout(()=> blip(170, .16, 'sawtooth', 0.7, 1.0), 150);
+  }
+
+  // 🎵 “재미있는” 미니 멜로디들 (C 메이저 중심, 칩튠 느낌)
+  // 각 요소는 [{f, d}] 배열 (f=Hz, d=초), type은 각 모티프별로 다르게 줘서 색감
+  const NOTE = {
+    C4:261.63, D4:293.66, E4:329.63, G4:392.00, A4:440.00,
+    C5:523.25, D5:587.33, E5:659.25, G5:783.99, A5:880.00,
+    C6:1046.50
+  };
+  const MOTIFS = [
+    { type:'square', notes:[ // 1) 상행 아르페지오
+      {f:NOTE.C5,d:.11},{f:NOTE.E5,d:.11},{f:NOTE.G5,d:.14}
+    ]},
+    { type:'triangle', notes:[ // 2) 상행 점프
+      {f:NOTE.E5,d:.11},{f:NOTE.G5,d:.11},{f:NOTE.C6,d:.16}
+    ]},
+    { type:'square', notes:[ // 3) 하행 해결
+      {f:NOTE.G5,d:.11},{f:NOTE.E5,d:.11},{f:NOTE.C5,d:.16}
+    ]},
+    { type:'sawtooth', notes:[ // 4) 스윙 느낌 (4음)
+      {f:NOTE.C5,d:.09},{f:NOTE.A4,d:.09},{f:NOTE.D5,d:.09},{f:NOTE.G5,d:.13}
+    ]},
+    { type:'triangle', notes:[ // 5) 러닝
+      {f:NOTE.C5,d:.09},{f:NOTE.D5,d:.09},{f:NOTE.E5,d:.09},{f:NOTE.G5,d:.13}
+    ]}
+  ];
+
+  function playCorrectMotif(){
+    const m = MOTIFS[state.motifIndex % MOTIFS.length];
+    state.motifIndex++;
+    // 박자 사이 여백(오프셋)
+    let offset = 0;
+    m.notes.forEach(({f,d}, idx)=>{
+      const delay = offset;
+      setTimeout(()=> blip(f, d, m.type, 0.85, 1.015), delay*1000);
+      offset += d * 1.05; // 살짝 여유
+    });
+  }
+
+  /* ---------- helpers ---------- */
+  const digitsOf = str => String(str).split('');
+  const placeDigits = (rcol, str)=>{
+    if(!str) return [];
+    const ds = digitsOf(str); const out=[];
+    for(let k=0;k<ds.length;k++){
+      const col = rcol - (ds.length-1-k);
+      if(col>=COL_H && col<=COL_O) out.push({col, ch:ds[k]});
+    }
+    return out;
+  };
+  const setMsg = t => msg.textContent = t;
+  const addLabel = (text,row)=>{
+    const d=document.createElement('div'); d.className='rowlabel'; d.textContent=text;
+    d.style.gridColumn='1'; d.style.gridRow=row; board.appendChild(d);
+  };
+  const cell = ({row,col,role='static',text='',key=''})=>{
+    const d=document.createElement('div');
+    d.className='cell'+(role!=='static'?' input':'');
+    d.style.gridColumn=String(col); d.style.gridRow=String(row);
+    if(role==='static'){ d.textContent=text; }
+    else{ const inp=document.createElement('input'); inp.type='text'; inp.inputMode='numeric'; inp.maxLength=1; inp.dataset.key=key; d.appendChild(inp); }
+    board.appendChild(d); return d;
+  };
+
+  /* ---------- non-trivial generator ---------- */
+  function generateNonTrivial(digits){
+    for(let t=0;t<300;t++){
+      const b=rint(2,9);
+      const lo=digits===2?10:100, hi=digits===2?99:999;
+      const a=rint(lo,hi);
+      if(a%b===0) continue;
+      const s=String(a);
+      let rem=0, nonZero=false;
+      for(let i=0;i<s.length;i++){
+        const cur=rem*10+Number(s[i]);
+        const q=Math.floor(cur/b), prod=q*b;
+        rem=cur-prod;
+        if(rem!==0 && i<s.length-1) nonZero=true;
+      }
+      if(nonZero) return {a,b};
+    }
+    return {a:143,b:7};
+  }
+
+  /* ---------- build steps ---------- */
+  function buildSteps(){
+    state.steps=[]; const s=String(state.a); const n=s.length;
+    state.startDigitCol = COL_O - (n-1);
+    let rem=0;
+    for(let i=0;i<n;i++){
+      const bring=Number(s[i]);
+      const cur=rem*10+bring;
+      const qd=Math.floor(cur/state.b);
+      const prod=qd*state.b;
+      const newRem=cur-prod;
+      const next=(i<n-1)?(newRem*10+Number(s[i+1])):null;
+      const rcol=state.startDigitCol+i;
+      state.steps.push({
+        i, qd, rcol,
+        prodDigits: prod?placeDigits(rcol,String(prod)):[],
+        nextDigits: next?placeDigits(rcol+1,String(next)):[]
+      });
+      rem=newRem;
+    }
+  }
+
+  /* ---------- render grid ---------- */
+  function renderGrid(){
+    board.innerHTML='<svg id="lines" class="lines" xmlns="http://www.w3.org/2000/svg"></svg>';
+    const n=String(state.a).length;
+    let row=1;
+
+    // quotient row
+    addLabel('',row);
+    for(let i=0;i<n;i++) cell({row,col:state.startDigitCol+i,role:'input',key:`q_${i}`});
+    row++;
+
+    // divisor + dividend
+    addLabel(String(state.b),row);
+    const aStr=String(state.a);
+    for(let i=0;i<n;i++) cell({row,col:state.startDigitCol+i,role:'static',text:aStr[i]});
+    const topBoxesRow=row; row++;
+
+    // steps
+    state.steps.forEach((st,i)=>{
+      addLabel('−',row);
+      st.prodDigits.forEach((o,k)=>cell({row,col:o.col,role:'input',key:`p_${i}_${k}`}));
+      const productRow=row; row++;
+      const lineRow=row; row++;
+      if(i<n-1){
+        addLabel('↓',row);
+        st.nextDigits.forEach((o,k)=>cell({row,col:o.col,role:'input',key:`d_${i}_${k}`}));
+        row++;
+      }
+      st.rows={topBoxesRow,productRow,lineRow};
+    });
+
+    // final remainder
+    addLabel('R',row);
+    cell({row,col:state.startDigitCol+(n-1),role:'input',key:`rem_final`});
+    state.finalRRow=row;
+
+    requestAnimationFrame(()=>{ drawLines(); addNumberingBadges(); bindLiveFeedback(); });
+    new ResizeObserver(()=>drawLines()).observe(board);
+  }
+
+  /* ---------- numbering badges (몫 → 부분곱 → 내려쓰기 → … → 나머지) ---------- */
+  function addNumberingBadges(){
+    board.querySelectorAll('.badge').forEach(b=>b.remove());
+    const order=[]; const n=state.steps.length;
+    for(let i=0;i<n;i++){
+      const q=board.querySelector(`input[data-key="q_${i}"]`); if(q) order.push(q);
+      order.push(...board.querySelectorAll(`input[data-key^="p_${i}_"]`));
+      if(i<n-1) order.push(...board.querySelectorAll(`input[data-key^="d_${i}_"]`));
+    }
+    const rem=board.querySelector(`input[data-key="rem_final"]`); if(rem) order.push(rem);
+    order.forEach((inp,idx)=>{
+      const badge=document.createElement('div'); badge.className='badge'; badge.textContent=String(idx+1);
+      inp.parentElement.appendChild(badge);
+    });
+  }
+
+  /* ---------- lines ---------- */
+  function drawLines(){
+    const svg=board.querySelector('#lines');
+    const rect=board.getBoundingClientRect();
+    const nodes=[...board.children].filter(n=>n!==svg);
+    const rowRect=r=>{
+      const els=nodes.filter(el=>getComputedStyle(el).gridRowStart===String(r));
+      if(!els.length) return null;
+      let t=Infinity,b=-Infinity;
+      els.forEach(e=>{const R=e.getBoundingClientRect();t=Math.min(t,R.top);b=Math.max(b,R.bottom);});
+      return {t,b};
+    };
+    const xLeft=c=>{
+      const el=nodes.find(e=>parseInt(getComputedStyle(e).gridColumnStart,10)===c);
+      return el?el.getBoundingClientRect().left-rect.left:0;
+    };
+    const xRight=c=>{
+      const el=nodes.find(e=>parseInt(getComputedStyle(e).gridColumnStart,10)===c);
+      return el?el.getBoundingClientRect().right-rect.left:rect.width;
+    };
+    const line=(x1,y1,x2,y2,w=2)=>{
+      const l=document.createElementNS('http://www.w3.org/2000/svg','line');
+      l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2);
+      l.setAttribute('stroke','#111'); l.setAttribute('stroke-width',w);
+      return l;
+    };
+    svg.innerHTML='';
+    if(!state.steps.length) return;
+    const xL=xLeft(COL_H), xR=xRight(COL_O);
+
+    // underline of divisor+dividend row
+    const top=rowRect(state.steps[0].rows.topBoxesRow);
+    if(top){
+      const y=top.b-rect.top+3;
+      svg.appendChild(line(xL,y,xR,y,2.5));
+      // vertical bar
+      const gutter=xLeft(COL_H)-6;
+      svg.appendChild(line(gutter,y,gutter,rect.height-16,2.5));
+    }
+    // mid subtraction lines
+    state.steps.forEach(st=>{
+      const mid=rowRect(st.rows.lineRow);
+      if(mid){
+        const y=(mid.t+mid.b)/2-rect.top;
+        svg.appendChild(line(xL,y,xR,y,2));
+      }
+    });
+    // line above final remainder row
+    const r=rowRect(state.finalRRow);
+    if(r){
+      const y=r.t-rect.top-4;
+      svg.appendChild(line(xL,y,xR,y,2.5));
+    }
+  }
+
+  /* ---------- expected ---------- */
+  const expectedFor = key => {
+    const [t,i,k]=key.split('_');
+    if(t==='q'){ const digs=state.steps.map(s=>String(s.qd)); return digs[+i]||''; }
+    if(t==='rem' && i==='final'){ return String(state.a%state.b); }
+    const s=state.steps[+i];
+    if(t==='p') return s?.prodDigits[+k]?.ch || '';
+    if(t==='d') return s?.nextDigits[+k]?.ch || '';
+    return '';
+  };
+
+  /* ---------- live feedback + completion check + sounds ---------- */
+  function bindLiveFeedback(){
+    state.rainbowIndex=0;
+    state.celebrated=false;
+    state.motifIndex=0;
+
+    const inputs=[...board.querySelectorAll('input[data-key]')];
+    inputs.forEach(inp=>{
+      inp.dataset.correct='no'; inp.parentElement.style.background='';
+      inp.addEventListener('input', ()=>{
+        const key=inp.dataset.key;
+        const want=expectedFor(key);
+        const got=clean(inp.value);
+
+        let ok=(got===want);
+        if(key.startsWith('q_') && key==='q_0' && (want==='0'||want==='')) ok=(got===''||got==='0');
+        if(key==='rem_final' && want==='0') ok=(got===''||got==='0');
+
+        if(got===''){
+          inp.parentElement.style.background='';
+          inp.dataset.correct='no';
+          return;
+        }
+
+        if(ok){
+          if(inp.dataset.correct!=='yes'){
+            // 색상 업데이트
+            const color=RAINBOW[state.rainbowIndex%RAINBOW.length];
+            state.rainbowIndex++;
+            inp.parentElement.style.background=color;
+            inp.dataset.correct='yes';
+            // 🎵 재미있는 멜로디
+            playCorrectMotif();
+          }
+        }else{
+          inp.parentElement.style.background=GRAY;
+          if(inp.dataset.correct!=='no'){ /* 바뀐 경우만 버저 */
+            playBuzz();
+          } else {
+            // 아직 한번도 맞은 적 없는 칸 → 오답 입력 시에도 버저
+            playBuzz();
+          }
+          inp.dataset.correct='no';
+        }
+
+        checkCompletionAndCelebrate(inputs);
+      });
+    });
+  }
+
+  function checkCompletionAndCelebrate(inputs){
+    for(const inp of inputs){
+      const key=inp.dataset.key;
+      const want=expectedFor(key);
+      const got=clean(inp.value);
+      let ok=(got===want);
+      if(key.startsWith('q_') && key==='q_0' && (want==='0'||want==='')) ok=(got===''||got==='0');
+      if(key==='rem_final' && want==='0') ok=(got===''||got==='0');
+      if(!ok) return; // not complete
+    }
+    if(!state.celebrated){
+      state.celebrated=true;
+      celebrate();
+    }
+  }
+
+  /* ---------- celebration: canvas confetti + toast ---------- */
+  function celebrate(){
+    // Toast
+    toast.style.display='block';
+    toast.style.opacity='0';
+    toast.animate([{opacity:0, transform:'translate(-50%,-6px)'},{opacity:1, transform:'translate(-50%,0)'}],
+                  {duration:250, fill:'forwards', easing:'ease-out'});
+
+    // Canvas setup
+    const ctx=cfx.getContext('2d');
+    const W=window.innerWidth, H=window.innerHeight;
+    cfx.width=W; cfx.height=H; cfx.style.display='block';
+
+    const colors=RAINBOW;
+    const N=180;
+    const parts=[];
+    for(let i=0;i<N;i++){
+      const angle=Math.random()*Math.PI*2;
+      const speed=4+Math.random()*4;
+      const vx=Math.cos(angle)*speed;
+      const vy=Math.sin(angle)*speed - 2;
+      parts.push({
+        x: W/2 + (Math.random()*120-60),
+        y: H*0.18 + (Math.random()*40-20),
+        vx, vy,
+        g: 0.12 + Math.random()*0.12,
+        s: 5 + Math.random()*5,
+        a: 1,
+        c: colors[i%colors.length],
+        rot: Math.random()*Math.PI, vr:(Math.random()-.5)*0.2,
+        shape: Math.random()<0.5?'rect':'circle'
+      });
+    }
+
+    let start=null;
+    function tick(ts){
+      if(!start) start=ts;
+      const dt=Math.min(32, ts-start); start=ts;
+
+      ctx.clearRect(0,0,W,H);
+      parts.forEach(p=>{
+        p.vy += p.g;
+        p.x  += p.vx;
+        p.y  += p.vy;
+        p.rot+= p.vr;
+        p.a  -= 0.0045;
+        ctx.globalAlpha=Math.max(0,p.a);
+
+        ctx.save();
+        ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+        ctx.fillStyle=p.c;
+        if(p.shape==='rect'){
+          ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*0.6);
+        }else{
+          ctx.beginPath(); ctx.arc(0,0,p.s/2,0,Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
+      });
+
+      const alive = parts.some(p=>p.a>0 && p.y<H+60);
+      if(alive) requestAnimationFrame(tick);
+      else {
+        cfx.style.display='none';
+        toast.animate([{opacity:1},{opacity:0}],{duration:300,fill:'forwards'}).onfinish=()=>{toast.style.display='none';};
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  /* ---------- manual check (button) ---------- */
+  function checkAll(){
+    let c=0,t=0;
+    const inputs=[...board.querySelectorAll('input[data-key]')];
+    inputs.forEach(inp=>{
+      const key=inp.dataset.key;
+      const want=expectedFor(key);
+      const got=clean(inp.value);
+      let ok=(got===want);
+      if(key.startsWith('q_') && key==='q_0' && (want==='0'||want==='')) ok=(got===''||got==='0');
+      if(key==='rem_final' && want==='0') ok=(got===''||got==='0');
+      if(want==='' && got==='') return;
+      t++; if(ok) c++;
+    });
+    setMsg(`Score: ${c}/${t}`);
+    checkCompletionAndCelebrate(inputs);
+  }
+
+  /* ---------- make new problem ---------- */
+  function makeProblem(){
+    state.digits=Number(modeSel.value);
+    const {a,b}=generateNonTrivial(state.digits);
+    state.a=a; state.b=b; state.celebrated=false; state.rainbowIndex=0; state.motifIndex=0;
+    buildSteps();
+    renderGrid();
+    setMsg('');
+    pill.textContent=`${a} ÷ ${b}`;
+  }
+
+  newBtn.addEventListener('click',makeProblem);
+  checkBtn.addEventListener('click',checkAll);
+  modeSel.addEventListener('change',makeProblem);
+
+  makeProblem();
+})();
+</script>
+</body>
+</html>
